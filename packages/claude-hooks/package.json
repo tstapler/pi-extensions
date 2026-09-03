@@ -1,0 +1,11 @@
+{
+  "name": "@tstapler/pi-claude-hooks",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Clean-room Claude Code command-hook compatibility for Pi",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}
