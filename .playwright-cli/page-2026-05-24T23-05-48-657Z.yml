@@ -1,0 +1,1285 @@
+- generic [ref=e3]:
+  - link "architecture" [ref=e5] [cursor=pointer]:
+    - /url: /viewer/Users/chris/development/pi/pi-packages/packages/pi-subagents/docs/architecture
+    - img [ref=e6]
+    - text: architecture
+  - heading "Architecture" [level=1] [ref=e8]:
+    - link [ref=e9] [cursor=pointer]:
+      - /url: "#architecture"
+      - text: "#"
+    - text: Architecture
+  - paragraph [ref=e10]: "This document describes the architecture of the pi-subagents fork: a focused, composable core with a stable API boundary that other extensions can build on."
+  - heading "Design principles" [level=2] [ref=e11]:
+    - link [ref=e12] [cursor=pointer]:
+      - /url: "#design-principles"
+      - text: "#"
+    - text: Design principles
+  - list [ref=e13]:
+    - listitem [ref=e14]:
+      - strong [ref=e15]: Narrow core
+      - text: — the extension owns agent spawning, execution, and result retrieval. Everything else is a consumer.
+    - listitem [ref=e16]:
+      - strong [ref=e17]: Composable by default
+      - text: — other extensions can spawn agents, observe their lifecycle, and display their state without importing this package directly.
+    - listitem [ref=e18]:
+      - strong [ref=e19]: Typed API boundary
+      - text: — this package exports a
+      - code [ref=e20]: SubagentsService
+      - text: interface and
+      - code [ref=e21]: Symbol.for()
+      - text: accessors (
+      - code [ref=e22]: publishSubagentsService
+      - text: /
+      - code [ref=e23]: getSubagentsService
+      - text: ). Consumers declare this package as an optional peer dependency and use dynamic import for compile-time types. The runtime bridge is
+      - code [ref=e24]: Symbol.for("@gotgenes/pi-subagents:service")
+      - text: "on"
+      - code [ref=e25]: globalThis
+      - text: — no separate API package.
+    - listitem [ref=e26]:
+      - strong [ref=e27]: No scheduling
+      - text: — in-process scheduling is removed from the core. Scheduling is a separate concern that any extension can implement by calling
+      - code [ref=e28]: spawn()
+      - text: on the published API.
+    - listitem [ref=e29]:
+      - strong [ref=e30]: UI extraction is deferred
+      - text: — the widget, conversation viewer, and
+      - code [ref=e31]: /agents
+      - text: command menu stay in the core for now. They are the first candidate for extraction once the API boundary is proven stable.
+    - listitem [ref=e32]:
+      - strong [ref=e33]: Snapshot, don't capture
+      - text: — mutable parent state (ctx, session, model) is read once at spawn time and frozen into a
+      - code [ref=e34]: ParentSnapshot
+      - text: data object. No live references survive past the spawn call.
+    - listitem [ref=e35]:
+      - strong [ref=e36]: Subscribe, don't thread
+      - text: — observation of agent progress uses direct session-event subscription, not callback parameters threaded through multiple layers.
+    - listitem [ref=e37]:
+      - strong [ref=e38]: Construct complete
+      - text: — objects are born with all their dependencies. If state isn't available yet, the object that needs it doesn't exist yet. No post-construction field writes from external code — if an object can't be instantiated ready-to-go, the prep work hasn't been done and the right dependencies haven't been identified.
+    - listitem [ref=e39]:
+      - strong [ref=e40]: State owns its mutations
+      - text: — mutable state lives in a class whose methods enforce valid transitions and invariants. Free functions that mutate module-scoped variables, closure-captured bags-of-functions, and external writes to shared interfaces are replaced by classes that encapsulate the state they manage.
+  - heading "Domain model" [level=2] [ref=e41]:
+    - link [ref=e42] [cursor=pointer]:
+      - /url: "#domain-model"
+      - text: "#"
+    - text: Domain model
+  - paragraph [ref=e43]: The extension is organized around six domains, each responsible for one aspect of managing agents.
+  - img [ref=e46]
+  - heading "Key domain types" [level=3] [ref=e47]:
+    - link [ref=e48] [cursor=pointer]:
+      - /url: "#key-domain-types"
+      - text: "#"
+    - text: Key domain types
+  - generic [ref=e49]: "classDiagram class AgentRecord { +id: string +type: SubagentType +description: string +status: AgentRecordStatus +result?: string +error?: string +toolUses: number +lifetimeUsage: LifetimeUsage +execution?: ExecutionState +worktreeState?: WorktreeState +notification?: NotificationState +markRunning() +markCompleted() +markAborted() +markSteered() +markError() +markStopped() +resetForResume() } class AgentManager { +spawn(snapshot, type, prompt, config) +spawnAndWait(snapshot, type, prompt, config) +resume(id, snapshot, exec) +getRecord(id): AgentRecord +listAgents(): AgentRecord[] +abort(id) +queueSteer(id, message) } class AgentTypeRegistry { +resolveType(type): string +resolveAgentConfig(type): AgentConfig +reload() +getToolNamesForType(type): string[] } class ParentSnapshot { +cwd: string +systemPrompt: string +model: unknown +modelRegistry: unknown +parentContext?: string } class SubagentsService { +spawn(type, prompt, options?) +getRecord(id): SubagentRecord +listAgents(): SubagentRecord[] +abort(id) +steer(id, message) +waitForAll() +hasRunning(): boolean } AgentManager --> AgentRecord : creates/manages AgentManager --> ParentSnapshot : receives at spawn SubagentsService --> AgentManager : wraps via adapter AgentManager --> AgentTypeRegistry : resolves types"
+  - heading "Agent lifecycle" [level=2] [ref=e50]:
+    - link [ref=e51] [cursor=pointer]:
+      - /url: "#agent-lifecycle"
+      - text: "#"
+    - text: Agent lifecycle
+  - generic [ref=e52]: "stateDiagram-v2 [*] --> queued : spawn (background, at capacity) [*] --> running : spawn (foreground or under limit) queued --> running : capacity available running --> completed : all turns finished running --> error : unhandled exception running --> aborted : abort() called running --> stopped : max turns reached running --> steered : steer message injected steered --> running : continues with message completed --> running : resetForResume stopped --> running : resetForResume error --> running : resetForResume aborted --> running : resetForResume completed --> [*] error --> [*] aborted --> [*] stopped --> [*] note right of running markCompleted, markAborted, markSteered, and markError are no-ops when status is stopped end note"
+  - paragraph [ref=e53]:
+    - text: "Note:"
+    - code [ref=e54]: markStopped
+    - text: always succeeds regardless of current status. Other terminal transitions guard against overwriting
+    - code [ref=e55]: stopped
+    - text: — once an agent is stopped, only
+    - code [ref=e56]: resetForResume
+    - text: can return it to
+    - code [ref=e57]: running
+    - text: .
+  - heading "Execution flow" [level=2] [ref=e58]:
+    - link [ref=e59] [cursor=pointer]:
+      - /url: "#execution-flow"
+      - text: "#"
+    - text: Execution flow
+  - generic [ref=e60]: "sequenceDiagram participant LLM as Parent LLM participant Tool as Agent tool participant Spawn as spawn-config participant Mgr as AgentManager participant Runner as agent-runner participant Asm as assembleSessionConfig participant Child as Child session LLM->>Tool: Agent(type, prompt, ...) Tool->>Spawn: resolveSpawnConfig(params) Spawn-->>Tool: ResolvedSpawnConfig Tool->>Mgr: spawn(snapshot, type, prompt, config) Mgr->>Runner: runAgent(record, snapshot, options, io) Runner->>Asm: assembleSessionConfig(type, ctx, opts, env, registry, io) Asm-->>Runner: SessionConfig Runner->>Child: create session + run turn loop Child-->>Runner: result text Runner-->>Mgr: update AgentRecord Note over Mgr: record-observer subscribes to session events for stats Note over Mgr: ui-observer subscribes for streaming state Mgr-->>Tool: AgentRecord Tool-->>LLM: formatted result"
+  - heading "Module organization" [level=2] [ref=e61]:
+    - link [ref=e62] [cursor=pointer]:
+      - /url: "#module-organization"
+      - text: "#"
+    - text: Module organization
+  - paragraph [ref=e63]:
+    - text: "The extension has 53 source files organized into six domains plus entry-point wiring. All eight domains have directories:"
+    - code [ref=e64]: config/
+    - text: ","
+    - code [ref=e65]: session/
+    - text: ","
+    - code [ref=e66]: lifecycle/
+    - text: ","
+    - code [ref=e67]: observation/
+    - text: ","
+    - code [ref=e68]: service/
+    - text: ","
+    - code [ref=e69]: tools/
+    - text: ","
+    - code [ref=e70]: ui/
+    - text: ", and"
+    - code [ref=e71]: handlers/
+    - text: ". Issue #164 moved the 26 previously flat root-level files into five new domain directories, reducing the root to 5 files + 8 directories."
+  - heading "Current layout" [level=3] [ref=e72]:
+    - link [ref=e73] [cursor=pointer]:
+      - /url: "#current-layout"
+      - text: "#"
+    - text: Current layout
+  - generic [ref=e74]:
+    - code [ref=e76]: src/ ├── index.ts entry point, tool registration, event wiring ├── runtime.ts SubagentRuntime factory (session-scoped state) ├── types.ts shared type definitions ├── settings.ts SettingsManager (persistent operational settings) ├── debug.ts debug logging utility │ ├── config/ agent type definitions and resolution │ ├── agent-types.ts AgentTypeRegistry class │ ├── default-agents.ts built-in agent configs (general-purpose, Explore, Plan) │ ├── custom-agents.ts user-defined agent .md file loader │ └── invocation-config.ts per-call config merge │ ├── session/ session assembly and preparation │ ├── session-config.ts pure assembler (main entry) │ ├── prompts.ts system prompt building │ ├── content-items.ts shared message content parsing (tool-call names, assistant content) │ ├── context.ts parent conversation extraction │ ├── safe-fs.ts symlink rejection and safe file reads │ ├── skill-loader.ts skill preloading │ ├── env.ts git/platform detection │ ├── model-resolver.ts fuzzy model name resolution │ └── session-dir.ts session directory derivation │ ├── lifecycle/ agent execution and state tracking │ ├── agent-manager.ts spawn, queue, abort, resume, concurrency │ ├── agent-runner.ts session creation, turn loop, tool filtering │ ├── agent-record.ts status state machine │ ├── parent-snapshot.ts immutable spawn-time parent state │ ├── execution-state.ts session/output phase state │ ├── worktree.ts git worktree isolation │ ├── worktree-state.ts worktree phase state │ └── usage.ts token usage tracking │ ├── observation/ progress tracking and notification │ ├── record-observer.ts session-event stats observer │ ├── notification.ts completion nudges │ ├── notification-state.ts per-agent notification tracking │ └── renderer.ts notification TUI component │ ├── service/ cross-extension API boundary │ ├── service.ts SubagentsService interface + Symbol.for() accessors │ └── service-adapter.ts SubagentsService wrapper around AgentManager │ ├── tools/ LLM-facing tool implementations │ ├── agent-tool.ts Agent tool definition, validation, dispatch │ ├── result-renderer.ts pure per-status result rendering │ ├── spawn-config.ts pure config resolution │ ├── foreground-runner.ts foreground execution loop │ ├── background-spawner.ts background spawn setup │ ├── get-result-tool.ts get_subagent_result tool │ ├── steer-tool.ts steer_subagent tool │ └── helpers.ts shared tool utilities │ ├── ui/ user-facing presentation │ ├── agent-widget.ts above-editor live status widget │ ├── widget-renderer.ts pure rendering for widget │ ├── agent-menu.ts /agents slash command menu │ ├── agent-config-editor.ts agent detail/edit view │ ├── agent-creation-wizard.ts agent creation (AI + manual) │ ├── conversation-viewer.ts scrollable session overlay │ ├── message-formatters.ts pure per-message-type formatters (extracted from conversation-viewer) │ ├── agent-activity-tracker.ts live activity state tracker │ ├── agent-file-ops.ts filesystem abstraction │ ├── ui-observer.ts session-event observer for streaming │ └── display.ts pure formatters and shared types │ └── handlers/ event handlers ├── index.ts barrel re-export ├── lifecycle.ts session_start, session_before_switch, session_shutdown └── tool-start.ts tool_execution_start handler
+    - button [ref=e77] [cursor=pointer]:
+      - img [ref=e78]
+  - heading "Observation model" [level=3] [ref=e81]:
+    - link [ref=e82] [cursor=pointer]:
+      - /url: "#observation-model"
+      - text: "#"
+    - text: Observation model
+  - paragraph [ref=e83]:
+    - text: Record statistics (tool uses, token usage, compaction counts) are updated by
+    - code [ref=e84]: record-observer.ts
+    - text: ", which subscribes directly to session events. UI streaming (active tools, response text, turn counts) is handled by"
+    - code [ref=e85]: ui/ui-observer.ts
+    - text: ", which subscribes to the same session events independently. Neither observer wraps or forwards the other — both subscribe directly to the session."
+  - paragraph [ref=e86]:
+    - text: The widget reads agent state by polling a shared
+    - code [ref=e87]: Map<string, AgentActivityTracker>
+    - text: "on"
+    - code [ref=e88]: SubagentRuntime
+    - text: every 80 ms. The conversation viewer subscribes directly to
+    - code [ref=e89]: AgentSession
+    - text: objects.
+  - heading "Cross-extension architecture" [level=2] [ref=e90]:
+    - link [ref=e91] [cursor=pointer]:
+      - /url: "#cross-extension-architecture"
+      - text: "#"
+    - text: Cross-extension architecture
+  - generic [ref=e92]:
+    - text: flowchart TD subgraph core["@gotgenes/pi-subagents"] direction TB exports["SubagentsService API
+    - text: publish / getSubagentsService
+    - text: "SubagentRecord, SubagentStatus\"] engine[\"Tools: Agent, get_subagent_result,"
+    - text: steer_subagent
+    - text: "AgentManager, agent-runner\"] ui_int[\"Internal UI: widget, viewer,"
+    - text: /agents menu"] end core -- "Symbol.for on globalThis" --> sched["scheduling extension
+    - text: (hypothetical)"] core -- "Symbol.for on globalThis" --> subui["pi-subagents-ui
+    - text: (deferred)"] core -- "Symbol.for on globalThis" --> future["any future extension"]
+  - paragraph [ref=e93]:
+    - text: Consumers call
+    - code [ref=e94]: getSubagentsService()?.spawn(...)
+    - text: at runtime. They declare this package as an optional peer dependency and use dynamic import for compile-time types.
+  - heading "What the core owns" [level=3] [ref=e95]:
+    - link [ref=e96] [cursor=pointer]:
+      - /url: "#what-the-core-owns"
+      - text: "#"
+    - text: What the core owns
+  - list [ref=e97]:
+    - listitem [ref=e98]:
+      - text: "The three tools:"
+      - code [ref=e99]: Agent
+      - text: ","
+      - code [ref=e100]: get_subagent_result
+      - text: ","
+      - code [ref=e101]: steer_subagent
+      - text: .
+    - listitem [ref=e102]:
+      - code [ref=e103]: AgentManager
+      - text: — spawn, queue, abort, resume, concurrency control.
+    - listitem [ref=e104]:
+      - code [ref=e105]: agent-runner
+      - text: — session creation, turn loop, tool filtering, extension binding (Patches 2 and 3).
+    - listitem [ref=e106]:
+      - code [ref=e107]: session-config
+      - text: — pure configuration assembler (extracted from
+      - code [ref=e108]: agent-runner
+      - text: ).
+    - listitem [ref=e109]:
+      - code [ref=e110]: SubagentRuntime
+      - text: — session-scoped state bag with methods.
+    - listitem [ref=e111]:
+      - code [ref=e112]: ParentSnapshot
+      - text: — immutable snapshot of parent session state, captured once at spawn time.
+    - listitem [ref=e113]:
+      - code [ref=e114]: record-observer
+      - text: — session-event observer that updates record statistics without callback threading.
+    - listitem [ref=e115]:
+      - text: Agent type registry — default agents, custom
+      - code [ref=e116]: .md
+      - text: file loading.
+    - listitem [ref=e117]: Prompt assembly, context extraction, skills, environment.
+    - listitem [ref=e118]: Worktree isolation.
+    - listitem [ref=e119]: Token usage tracking.
+    - listitem [ref=e120]:
+      - text: Session directory derivation and persisted
+      - code [ref=e121]: SessionManager
+      - text: for subagent transcripts.
+    - listitem [ref=e122]: Settings persistence.
+    - listitem [ref=e123]:
+      - text: Internal UI (widget, conversation viewer,
+      - code [ref=e124]: /agents
+      - text: menu) — these stay until the API boundary is proven, then move to a separate extension.
+  - heading "What the core dropped" [level=3] [ref=e125]:
+    - link [ref=e126] [cursor=pointer]:
+      - /url: "#what-the-core-dropped"
+      - text: "#"
+    - text: What the core dropped
+  - list [ref=e127]:
+    - listitem [ref=e128]:
+      - strong [ref=e129]: Scheduling
+      - text: (
+      - code [ref=e130]: schedule.ts
+      - text: ","
+      - code [ref=e131]: schedule-store.ts
+      - text: ","
+      - code [ref=e132]: ui/schedule-menu.ts
+      - text: ) — removed (#52).
+    - listitem [ref=e133]:
+      - strong [ref=e134]: Ad-hoc RPC
+      - text: (
+      - code [ref=e135]: cross-extension-rpc.ts
+      - text: ) — replaced by the typed
+      - code [ref=e136]: SubagentsService
+      - text: published via
+      - code [ref=e137]: Symbol.for()
+      - text: (#49).
+    - listitem [ref=e138]:
+      - strong [ref=e139]: Group join
+      - text: (
+      - code [ref=e140]: group-join.ts
+      - text: ) — removed (#49).
+    - listitem [ref=e141]:
+      - strong [ref=e142]: Output file
+      - text: (
+      - code [ref=e143]: output-file.ts
+      - text: ) — replaced by
+      - code [ref=e144]: session-dir.ts
+      - text: +
+      - code [ref=e145]: SessionManager.create()
+      - text: (#61).
+    - listitem [ref=e146]:
+      - strong [ref=e147]: Callback threading
+      - text: — the three-layer
+      - code [ref=e148]: on*
+      - text: callback chain was replaced by direct session-event subscriptions (#100).
+    - listitem [ref=e149]:
+      - strong [ref=e150]:
+        - text: Live
+        - code [ref=e151]: ctx
+        - text: capture
+      - text: — replaced by
+      - code [ref=e152]: ParentSnapshot
+      - text: ", an immutable data object captured once at spawn time (#99)."
+  - heading "SubagentsService" [level=2] [ref=e153]:
+    - link [ref=e154] [cursor=pointer]:
+      - /url: "#subagentsservice"
+      - text: "#"
+    - text: SubagentsService
+  - paragraph [ref=e155]:
+    - text: The
+    - code [ref=e156]: SubagentsService
+    - text: interface, accessor functions, and serializable types are exported from
+    - code [ref=e157]: "@gotgenes/pi-subagents"
+    - text: via the
+    - code [ref=e158]: ./service
+    - text: export map entry. No separate API package is needed.
+  - paragraph [ref=e159]: "Consumers declare this package as an optional peer dependency:"
+  - generic [ref=e160]:
+    - code [ref=e162]:
+      - text: "{ \"peerDependencies\": { \"@gotgenes/pi-subagents\": \">=5.0.0\" }, \"peerDependenciesMeta\": { \"@gotgenes/pi-subagents\": { \"optional\":"
+      - generic [ref=e163]: "true"
+      - text: "} } }"
+    - button [ref=e164] [cursor=pointer]:
+      - img [ref=e165]
+  - paragraph [ref=e168]: "At runtime, consumers use dynamic import for type-safe access to the accessor functions:"
+  - generic [ref=e169]:
+    - code [ref=e171]: "const { getSubagentsService } = await import(\"@gotgenes/pi-subagents\"); const svc = getSubagentsService(); if (svc) { svc.spawn(\"Explore\", \"Check for stale TODOs\"); }"
+    - button [ref=e172] [cursor=pointer]:
+      - img [ref=e173]
+  - paragraph [ref=e176]:
+    - text: Pi's extension loader creates a fresh
+    - code [ref=e177]: jiti
+    - text: instance per extension with
+    - code [ref=e178]: "moduleCache: false"
+    - text: ", so module-scoped singletons don't survive across extensions. The accessor functions use"
+    - code [ref=e179]: Symbol.for("@gotgenes/pi-subagents:service")
+    - text: "on"
+    - code [ref=e180]: globalThis
+    - text: ", which is process-global by spec, to bridge this gap. The dynamic import provides compile-time types; the"
+    - code [ref=e181]: Symbol.for()
+    - text: key is the actual runtime channel.
+  - heading "Interface" [level=3] [ref=e182]:
+    - link [ref=e183] [cursor=pointer]:
+      - /url: "#interface"
+      - text: "#"
+    - text: Interface
+  - paragraph [ref=e184]:
+    - text: See
+    - code [ref=e185]: src/service.ts
+    - text: "for the canonical definition. Key types:"
+  - list [ref=e186]:
+    - listitem [ref=e187]:
+      - code [ref=e188]: SubagentsService
+      - text: —
+      - code [ref=e189]: spawn
+      - text: ","
+      - code [ref=e190]: getRecord
+      - text: ","
+      - code [ref=e191]: listAgents
+      - text: ","
+      - code [ref=e192]: abort
+      - text: ","
+      - code [ref=e193]: steer
+      - text: ","
+      - code [ref=e194]: waitForAll
+      - text: ","
+      - code [ref=e195]: hasRunning
+      - text: .
+    - listitem [ref=e196]:
+      - code [ref=e197]: SubagentRecord
+      - text: — serializable agent snapshot (no live session objects).
+    - listitem [ref=e198]:
+      - code [ref=e199]: SpawnOptions
+      - text: —
+      - code [ref=e200]: description
+      - text: ","
+      - code [ref=e201]: model
+      - text: ","
+      - code [ref=e202]: maxTurns
+      - text: ","
+      - code [ref=e203]: thinkingLevel
+      - text: ","
+      - code [ref=e204]: isolated
+      - text: ","
+      - code [ref=e205]: inheritContext
+      - text: ","
+      - code [ref=e206]: foreground
+      - text: ","
+      - code [ref=e207]: bypassQueue
+      - text: ","
+      - code [ref=e208]: isolation
+      - text: .
+    - listitem [ref=e209]:
+      - code [ref=e210]: SUBAGENT_EVENTS
+      - text: — channel constants for
+      - code [ref=e211]: pi.events
+      - text: subscriptions.
+  - heading "Accessor pattern" [level=3] [ref=e212]:
+    - link [ref=e213] [cursor=pointer]:
+      - /url: "#accessor-pattern"
+      - text: "#"
+    - text: Accessor pattern
+  - generic [ref=e214]:
+    - code [ref=e216]:
+      - text: const SERVICE_KEY = Symbol.for("@gotgenes/pi-subagents:service"); export function publishSubagentsService(
+      - generic [ref=e217]: "service: SubagentsService"
+      - text: "): void { (globalThis as Record<symbol, unknown>)[SERVICE_KEY] = service; } export function getSubagentsService("
+      - text: "): SubagentsService | undefined { return (globalThis as Record<symbol, unknown>)[SERVICE_KEY] as | SubagentsService | undefined; }"
+    - button [ref=e218] [cursor=pointer]:
+      - img [ref=e219]
+  - paragraph [ref=e222]:
+    - text: If Pi gains a native service registry (
+    - link "earendil-works/pi#4207" [ref=e223] [cursor=pointer]:
+      - /url: https://github.com/earendil-works/pi/issues/4207
+    - text: ), these accessors can be updated to delegate to
+    - code [ref=e224]: pi.registerService()
+    - text: /
+    - code [ref=e225]: pi.getService()
+    - text: internally while keeping the same consumer API.
+  - heading "Lifecycle events" [level=3] [ref=e226]:
+    - link [ref=e227] [cursor=pointer]:
+      - /url: "#lifecycle-events"
+      - text: "#"
+    - text: Lifecycle events
+  - paragraph [ref=e228]:
+    - text: The core emits events on
+    - code [ref=e229]: pi.events
+    - text: "that any extension can observe:"
+  - table [ref=e230]:
+    - rowgroup [ref=e231]:
+      - row "Channel Payload When" [ref=e232]:
+        - columnheader "Channel" [ref=e233]
+        - columnheader "Payload" [ref=e234]
+        - columnheader "When" [ref=e235]
+    - rowgroup [ref=e236]:
+      - 'row "subagents:started { id, type, description } Agent begins running" [ref=e237]':
+        - cell "subagents:started" [ref=e238]:
+          - code [ref=e239]: subagents:started
+        - 'cell "{ id, type, description }" [ref=e240]':
+          - code [ref=e241]: "{ id, type, description }"
+        - cell "Agent begins running" [ref=e242]
+      - 'row "subagents:completed { id, type, status, result?, error? } Agent finishes" [ref=e243]':
+        - cell "subagents:completed" [ref=e244]:
+          - code [ref=e245]: subagents:completed
+        - 'cell "{ id, type, status, result?, error? }" [ref=e246]':
+          - code [ref=e247]: "{ id, type, status, result?, error? }"
+        - cell "Agent finishes" [ref=e248]
+      - 'row "subagents:activity { id, toolName?, textDelta?, turnCount? } Streaming progress" [ref=e249]':
+        - cell "subagents:activity" [ref=e250]:
+          - code [ref=e251]: subagents:activity
+        - 'cell "{ id, toolName?, textDelta?, turnCount? }" [ref=e252]':
+          - code [ref=e253]: "{ id, toolName?, textDelta?, turnCount? }"
+        - cell "Streaming progress" [ref=e254]
+  - paragraph [ref=e255]: These are fire-and-forget broadcast events — no request IDs, no reply channels.
+  - heading "Current structural analysis" [level=2] [ref=e256]:
+    - link [ref=e257] [cursor=pointer]:
+      - /url: "#current-structural-analysis"
+      - text: "#"
+    - text: Current structural analysis
+  - heading "Health metrics" [level=3] [ref=e258]:
+    - link [ref=e259] [cursor=pointer]:
+      - /url: "#health-metrics"
+      - text: "#"
+    - text: Health metrics
+  - table [ref=e260]:
+    - rowgroup [ref=e261]:
+      - row "Metric Value" [ref=e262]:
+        - columnheader "Metric" [ref=e263]
+        - columnheader "Value" [ref=e264]
+    - rowgroup [ref=e265]:
+      - row "Health score 75/100 (B)" [ref=e266]:
+        - cell "Health score" [ref=e267]
+        - cell "75/100 (B)" [ref=e268]
+      - row "Total LOC 8,218 (53 files)" [ref=e269]:
+        - cell "Total LOC" [ref=e270]
+        - cell "8,218 (53 files)" [ref=e271]
+      - row "Dead code 0 files, 0 exports" [ref=e272]:
+        - cell "Dead code" [ref=e273]
+        - cell "0 files, 0 exports" [ref=e274]
+      - row "Maintainability index 90.7 (good)" [ref=e275]:
+        - cell "Maintainability index" [ref=e276]
+        - cell "90.7 (good)" [ref=e277]
+      - row "Avg cyclomatic complexity 1.5" [ref=e278]:
+        - cell "Avg cyclomatic complexity" [ref=e279]
+        - cell "1.5" [ref=e280]
+      - row "P90 cyclomatic complexity 2" [ref=e281]:
+        - cell "P90 cyclomatic complexity" [ref=e282]
+        - cell "2" [ref=e283]
+      - row "Production duplication 18 lines (1 clone group)" [ref=e284]:
+        - cell "Production duplication" [ref=e285]
+        - cell "18 lines (1 clone group)" [ref=e286]
+      - row "Test duplication 71 clone groups, 1,424 lines" [ref=e287]:
+        - cell "Test duplication" [ref=e288]
+        - cell "71 clone groups, 1,424 lines" [ref=e289]
+  - heading "Dependency bag inventory" [level=3] [ref=e290]:
+    - link [ref=e291] [cursor=pointer]:
+      - /url: "#dependency-bag-inventory"
+      - text: "#"
+    - text: Dependency bag inventory
+  - paragraph [ref=e292]: These interfaces carry hidden dependencies that obscure true coupling. Bags with 10+ fields are the highest priority for decomposition.
+  - table [ref=e293]:
+    - rowgroup [ref=e294]:
+      - row "Interface Fields Consumers Severity" [ref=e295]:
+        - columnheader "Interface" [ref=e296]
+        - columnheader "Fields" [ref=e297]
+        - columnheader "Consumers" [ref=e298]
+        - columnheader "Severity" [ref=e299]
+    - rowgroup [ref=e300]:
+      - row "ResolvedSpawnConfig 3 nested foreground-runner, background-spawner, agent-tool ✓ done" [ref=e301]:
+        - cell "ResolvedSpawnConfig" [ref=e302]:
+          - code [ref=e303]: ResolvedSpawnConfig
+        - cell "3 nested" [ref=e304]
+        - cell "foreground-runner, background-spawner, agent-tool" [ref=e305]
+        - cell "✓ done" [ref=e306]
+      - row "AgentSpawnConfig 13 → 13 (ParentSessionInfo nested) agent-manager (internal) ✓ done" [ref=e307]:
+        - cell "AgentSpawnConfig" [ref=e308]:
+          - code [ref=e309]: AgentSpawnConfig
+        - cell "13 → 13 (ParentSessionInfo nested)" [ref=e310]
+        - cell "agent-manager (internal)" [ref=e311]
+        - cell "✓ done" [ref=e312]
+      - row "RunOptions 9 (RunContext nested) agent-runner ✓ done" [ref=e313]:
+        - cell "RunOptions" [ref=e314]:
+          - code [ref=e315]: RunOptions
+        - cell "9 (RunContext nested)" [ref=e316]:
+          - text: 9 (
+          - code [ref=e317]: RunContext
+          - text: nested)
+        - cell "agent-runner" [ref=e318]
+        - cell "✓ done" [ref=e319]
+      - row "SessionConfig 8 (ToolFilterConfig nested) agent-runner (output of assembler) ✓ done" [ref=e320]:
+        - cell "SessionConfig" [ref=e321]:
+          - code [ref=e322]: SessionConfig
+        - cell "8 (ToolFilterConfig nested)" [ref=e323]
+        - cell "agent-runner (output of assembler)" [ref=e324]
+        - cell "✓ done" [ref=e325]
+      - row "NotificationDetails 10 notification Medium" [ref=e326]:
+        - cell "NotificationDetails" [ref=e327]:
+          - code [ref=e328]: NotificationDetails
+        - cell "10" [ref=e329]
+        - cell "notification" [ref=e330]
+        - cell "Medium" [ref=e331]
+      - row "ResourceLoaderOptions 10 agent-runner (SDK bridge) Medium" [ref=e332]:
+        - cell "ResourceLoaderOptions" [ref=e333]:
+          - code [ref=e334]: ResourceLoaderOptions
+        - cell "10" [ref=e335]
+        - cell "agent-runner (SDK bridge)" [ref=e336]
+        - cell "Medium" [ref=e337]
+      - row "RunnerIO split → EnvironmentIO (3) + SessionFactoryIO (5+1) agent-runner ✓ done" [ref=e338]:
+        - cell "RunnerIO" [ref=e339]:
+          - code [ref=e340]: RunnerIO
+        - cell "split → EnvironmentIO (3) + SessionFactoryIO (5+1)" [ref=e341]:
+          - text: split →
+          - code [ref=e342]: EnvironmentIO
+          - text: (3) +
+          - code [ref=e343]: SessionFactoryIO
+          - text: (5+1)
+        - cell "agent-runner" [ref=e344]
+        - cell "✓ done" [ref=e345]
+      - row "CreateSessionOptions 9 agent-runner (SDK bridge) Medium" [ref=e346]:
+        - cell "CreateSessionOptions" [ref=e347]:
+          - code [ref=e348]: CreateSessionOptions
+        - cell "9" [ref=e349]
+        - cell "agent-runner (SDK bridge)" [ref=e350]
+        - cell "Medium" [ref=e351]
+      - row "AgentToolDeps 8 agent-tool Low" [ref=e352]:
+        - cell "AgentToolDeps" [ref=e353]:
+          - code [ref=e354]: AgentToolDeps
+        - cell "8" [ref=e355]
+        - cell "agent-tool" [ref=e356]
+        - cell "Low" [ref=e357]
+      - row "AgentMenuDeps 8 agent-menu Low" [ref=e358]:
+        - cell "AgentMenuDeps" [ref=e359]:
+          - code [ref=e360]: AgentMenuDeps
+        - cell "8" [ref=e361]
+        - cell "agent-menu" [ref=e362]
+        - cell "Low" [ref=e363]
+      - row "ConversationViewerOptions 8 conversation-viewer Low" [ref=e364]:
+        - cell "ConversationViewerOptions" [ref=e365]:
+          - code [ref=e366]: ConversationViewerOptions
+        - cell "8" [ref=e367]
+        - cell "conversation-viewer" [ref=e368]
+        - cell "Low" [ref=e369]
+      - row "AgentRecordInit 8 agent-record Low" [ref=e370]:
+        - cell "AgentRecordInit" [ref=e371]:
+          - code [ref=e372]: AgentRecordInit
+        - cell "8" [ref=e373]
+        - cell "agent-record" [ref=e374]
+        - cell "Low" [ref=e375]
+  - heading "Complexity hotspots" [level=3] [ref=e376]:
+    - link [ref=e377] [cursor=pointer]:
+      - /url: "#complexity-hotspots"
+      - text: "#"
+    - text: Complexity hotspots
+  - paragraph [ref=e378]: "Functions with cyclomatic complexity ≥ 21 (critical threshold):"
+  - table [ref=e379]:
+    - rowgroup [ref=e380]:
+      - row "Function Cyclomatic Cognitive File Concern" [ref=e381]:
+        - columnheader "Function" [ref=e382]
+        - columnheader "Cyclomatic" [ref=e383]
+        - columnheader "Cognitive" [ref=e384]
+        - columnheader "File" [ref=e385]
+        - columnheader "Concern" [ref=e386]
+    - rowgroup [ref=e387]:
+      - row "showAgentDetail 25 33 ui/agent-config-editor.ts Agent detail/edit view" [ref=e388]:
+        - cell "showAgentDetail" [ref=e389]:
+          - code [ref=e390]: showAgentDetail
+        - cell "25" [ref=e391]
+        - cell "33" [ref=e392]
+        - cell "ui/agent-config-editor.ts" [ref=e393]:
+          - code [ref=e394]: ui/agent-config-editor.ts
+        - cell "Agent detail/edit view" [ref=e395]
+      - row "renderWidgetLines 25 44 ui/widget-renderer.ts Renders widget status lines" [ref=e396]:
+        - cell "renderWidgetLines" [ref=e397]:
+          - code [ref=e398]: renderWidgetLines
+        - cell "25" [ref=e399]
+        - cell "44" [ref=e400]
+        - cell "ui/widget-renderer.ts" [ref=e401]:
+          - code [ref=e402]: ui/widget-renderer.ts
+        - cell "Renders widget status lines" [ref=e403]
+      - row "ejectAgent 21 20 ui/agent-config-editor.ts Eject agent to filesystem" [ref=e404]:
+        - cell "ejectAgent" [ref=e405]:
+          - code [ref=e406]: ejectAgent
+        - cell "21" [ref=e407]
+        - cell "20" [ref=e408]
+        - cell "ui/agent-config-editor.ts" [ref=e409]:
+          - code [ref=e410]: ui/agent-config-editor.ts
+        - cell "Eject agent to filesystem" [ref=e411]
+      - row "update 21 31 ui/agent-widget.ts Widget lifecycle + polling" [ref=e412]:
+        - cell "update" [ref=e413]:
+          - code [ref=e414]: update
+        - cell "21" [ref=e415]
+        - cell "31" [ref=e416]
+        - cell "ui/agent-widget.ts" [ref=e417]:
+          - code [ref=e418]: ui/agent-widget.ts
+        - cell "Widget lifecycle + polling" [ref=e419]
+  - heading "Churn hotspots" [level=3] [ref=e420]:
+    - link [ref=e421] [cursor=pointer]:
+      - /url: "#churn-hotspots"
+      - text: "#"
+    - text: Churn hotspots
+  - paragraph [ref=e422]: "Files with highest commit frequency × complexity (accelerating trend):"
+  - table [ref=e423]:
+    - rowgroup [ref=e424]:
+      - row "Score File Commits" [ref=e425]:
+        - columnheader "Score" [ref=e426]
+        - columnheader "File" [ref=e427]
+        - columnheader "Commits" [ref=e428]
+    - rowgroup [ref=e429]:
+      - row "85.7 index.ts 65" [ref=e430]:
+        - cell "85.7" [ref=e431]
+        - cell "index.ts" [ref=e432]:
+          - code [ref=e433]: index.ts
+        - cell "65" [ref=e434]
+      - row "35.9 agent-manager.ts 31" [ref=e435]:
+        - cell "35.9" [ref=e436]
+        - cell "agent-manager.ts" [ref=e437]:
+          - code [ref=e438]: agent-manager.ts
+        - cell "31" [ref=e439]
+      - row "25.9 ui/agent-menu.ts 26" [ref=e440]:
+        - cell "25.9" [ref=e441]
+        - cell "ui/agent-menu.ts" [ref=e442]:
+          - code [ref=e443]: ui/agent-menu.ts
+        - cell "26" [ref=e444]
+      - row "23.3 tools/agent-tool.ts 30" [ref=e445]:
+        - cell "23.3" [ref=e446]
+        - cell "tools/agent-tool.ts" [ref=e447]:
+          - code [ref=e448]: tools/agent-tool.ts
+        - cell "30" [ref=e449]
+  - heading "Production duplication" [level=3] [ref=e450]:
+    - link [ref=e451] [cursor=pointer]:
+      - /url: "#production-duplication"
+      - text: "#"
+    - text: Production duplication
+  - paragraph [ref=e452]:
+    - text: The 18-line clone group between
+    - code [ref=e453]: agent-runner.ts
+    - text: and
+    - code [ref=e454]: message-formatters.ts
+    - text: "was resolved in #172."
+    - code [ref=e455]: ToolCallContent
+    - text: ","
+    - code [ref=e456]: getToolCallName
+    - text: ", and"
+    - code [ref=e457]: extractAssistantContent
+    - text: now live in
+    - code [ref=e458]: session/content-items.ts
+    - text: . No known production duplication remains.
+  - heading "Proposed bag decompositions" [level=3] [ref=e459]:
+    - link [ref=e460] [cursor=pointer]:
+      - /url: "#proposed-bag-decompositions"
+      - text: "#"
+    - text: Proposed bag decompositions
+  - heading "ResolvedSpawnConfig (15 fields → 3 value objects)" [level=4] [ref=e461]:
+    - link [ref=e462] [cursor=pointer]:
+      - /url: "#resolvedspawnconfig-(15-fields-%E2%86%92-3-value-objects)"
+      - text: "#"
+    - text: ResolvedSpawnConfig (15 fields → 3 value objects)
+  - paragraph [ref=e463]: "This bag mixes three concerns: who the agent is, how it should run, and how it should be displayed. Each consumer uses a different subset."
+  - generic [ref=e464]:
+    - code [ref=e466]: "/** Who this agent is — type resolution result. */ interface SpawnIdentity { subagentType: string; rawType: SubagentType; fellBack: boolean; displayName: string; } /** How the agent should run — execution parameters. */ interface SpawnExecution { prompt: string; description: string; model: Model<any> | undefined; effectiveMaxTurns: number | undefined; thinking: ThinkingLevel | undefined; inheritContext: boolean; runInBackground: boolean; isolated: boolean; isolation: IsolationMode | undefined; agentInvocation: AgentInvocation; } /** How the agent is presented — display metadata. */ interface SpawnPresentation { modelName: string | undefined; agentTags: string[]; detailBase: Pick<AgentDetails, ...>; }"
+    - button [ref=e467] [cursor=pointer]:
+      - img [ref=e468]
+  - paragraph [ref=e471]:
+    - code [ref=e472]: foreground-runner
+    - text: and
+    - code [ref=e473]: background-spawner
+    - text: primarily consume
+    - code [ref=e474]: SpawnExecution
+    - text: +
+    - code [ref=e475]: SpawnIdentity
+    - text: .
+    - code [ref=e476]: agent-tool
+    - text: uses all three to build the
+    - code [ref=e477]: AgentSpawnConfig
+    - text: and the result text. After decomposition, each consumer declares its real dependencies explicitly.
+  - 'heading "AgentSpawnConfig — ParentSessionInfo extracted (done, #166)" [level=4] [ref=e478]':
+    - link [ref=e479] [cursor=pointer]:
+      - /url: "#agentspawnconfig-%E2%80%94-parentsessioninfo-extracted-(done%2C-%23166)"
+      - text: "#"
+    - text: AgentSpawnConfig — ParentSessionInfo extracted (done,
+    - link "#166" [ref=e480] [cursor=pointer]:
+      - /url: https://github.com/gotgenes/pi-packages/issues/166
+    - text: )
+  - paragraph [ref=e481]:
+    - text: The
+    - code [ref=e482]: parentSessionFile
+    - text: ","
+    - code [ref=e483]: parentSessionId
+    - text: ", and"
+    - code [ref=e484]: toolCallId
+    - text: fields were grouped into
+    - code [ref=e485]: ParentSessionInfo
+    - text: ":"
+  - generic [ref=e486]:
+    - code [ref=e488]: "/** Parent session identity — always travel together from the tool boundary. */ export interface ParentSessionInfo { parentSessionFile?: string; parentSessionId?: string; toolCallId?: string; }"
+    - button [ref=e489] [cursor=pointer]:
+      - img [ref=e490]
+  - paragraph [ref=e493]:
+    - code [ref=e494]: AgentSpawnConfig
+    - text: now carries
+    - code [ref=e495]: "parentSession?: ParentSessionInfo"
+    - text: instead of three flat optional fields.
+  - heading "RunOptions (12 fields → extract RunContext) — done (#169)" [level=4] [ref=e496]:
+    - link [ref=e497] [cursor=pointer]:
+      - /url: "#runoptions-(12-fields-%E2%86%92-extract-runcontext)-%E2%80%94-done-(%23169)"
+      - text: "#"
+    - text: RunOptions (12 fields → extract RunContext) — done (
+    - link "#169" [ref=e498] [cursor=pointer]:
+      - /url: https://github.com/gotgenes/pi-packages/issues/169
+    - text: )
+  - paragraph [ref=e499]:
+    - text: The
+    - code [ref=e500]: RunOptions
+    - text: bag mixes execution parameters with context information.
+    - code [ref=e501]: RunContext
+    - text: was extracted and nested as
+    - code [ref=e502]: RunOptions.context
+    - text: ":"
+  - generic [ref=e503]:
+    - code [ref=e505]: "/** Parent execution context — where/who is running. */ export interface RunContext { exec: ShellExec; registry: AgentConfigLookup; cwd?: string; parentSession?: ParentSessionInfo; }"
+    - button [ref=e506] [cursor=pointer]:
+      - img [ref=e507]
+  - paragraph [ref=e510]:
+    - text: The remaining
+    - code [ref=e511]: RunOptions
+    - text: fields (
+    - code [ref=e512]: model
+    - text: ","
+    - code [ref=e513]: maxTurns
+    - text: ","
+    - code [ref=e514]: signal
+    - text: ","
+    - code [ref=e515]: isolated
+    - text: ","
+    - code [ref=e516]: thinkingLevel
+    - text: ","
+    - code [ref=e517]: defaultMaxTurns
+    - text: ","
+    - code [ref=e518]: graceTurns
+    - text: ","
+    - code [ref=e519]: onSessionCreated
+    - text: ) are genuine execution parameters.
+    - code [ref=e520]: RunOptions
+    - text: "now has 9 fields: 1 nested"
+    - code [ref=e521]: "context: RunContext"
+    - text: plus 8 flat execution fields.
+  - heading "SessionConfig (11 fields → extract ToolFilterConfig) — done (#168)" [level=4] [ref=e522]:
+    - link [ref=e523] [cursor=pointer]:
+      - /url: "#sessionconfig-(11-fields-%E2%86%92-extract-toolfilterconfig)-%E2%80%94-done-(%23168)"
+      - text: "#"
+    - text: SessionConfig (11 fields → extract ToolFilterConfig) — done (
+    - link "#168" [ref=e524] [cursor=pointer]:
+      - /url: https://github.com/gotgenes/pi-packages/issues/168
+    - text: )
+  - paragraph [ref=e525]:
+    - text: The tool-filtering cluster (
+    - code [ref=e526]: toolNames
+    - text: ","
+    - code [ref=e527]: disallowedSet
+    - text: ","
+    - code [ref=e528]: extensions
+    - text: ) was extracted into
+    - code [ref=e529]: ToolFilterConfig
+    - text: and nested as
+    - code [ref=e530]: SessionConfig.toolFilter
+    - text: .
+    - code [ref=e531]: filterActiveTools
+    - text: now accepts a single
+    - code [ref=e532]: ToolFilterConfig
+    - text: argument instead of three positional parameters.
+    - code [ref=e533]: SessionConfig
+    - text: reduced from 10 to 8 top-level fields.
+  - heading "RunnerIO (9 methods → 2 focused interfaces) — done (#167)" [level=4] [ref=e534]:
+    - link [ref=e535] [cursor=pointer]:
+      - /url: "#runnerio-(9-methods-%E2%86%92-2-focused-interfaces)-%E2%80%94-done-(%23167)"
+      - text: "#"
+    - text: RunnerIO (9 methods → 2 focused interfaces) — done (
+    - link "#167" [ref=e536] [cursor=pointer]:
+      - /url: https://github.com/gotgenes/pi-packages/issues/167
+    - text: )
+  - paragraph [ref=e537]: "The IO boundary was split into two focused interfaces:"
+  - generic [ref=e538]:
+    - code [ref=e540]:
+      - text: "/** Environment discovery — detect runtime context and resolve directories. */ export interface EnvironmentIO { detectEnv:"
+      - generic [ref=e541]:
+        - text: (
+        - generic [ref=e542]: "exec: ShellExec, cwd: string"
+        - text: ) =>
+      - text: "Promise<EnvInfo>; getAgentDir: () => string; deriveSessionDir:"
+      - generic [ref=e543]:
+        - text: (
+        - generic [ref=e544]: "parentSessionFile: string | undefined, effectiveCwd: string"
+        - text: ) =>
+      - text: "string; } /** Session factory — create SDK objects for a child agent session. */ export interface SessionFactoryIO { createResourceLoader:"
+      - generic [ref=e545]:
+        - text: (
+        - generic [ref=e546]: "opts: ResourceLoaderOptions"
+        - text: ) =>
+      - text: "ResourceLoaderLike; createSessionManager:"
+      - generic [ref=e547]:
+        - text: (
+        - generic [ref=e548]: "cwd: string, sessionDir: string"
+        - text: ) =>
+      - text: "SessionManagerLike; createSettingsManager:"
+      - generic [ref=e549]:
+        - text: (
+        - generic [ref=e550]: "cwd: string, agentDir: string"
+        - text: ) =>
+      - text: "SettingsManager; createSession:"
+      - generic [ref=e551]:
+        - text: (
+        - generic [ref=e552]: "opts: CreateSessionOptions"
+        - text: ) =>
+      - text: "Promise<{ session: AgentSession }>; assemblerIO: AssemblerIO; } /** Backward-compatible intersection of the two focused interfaces. */ export type RunnerIO = EnvironmentIO & SessionFactoryIO;"
+    - button [ref=e553] [cursor=pointer]:
+      - img [ref=e554]
+  - paragraph [ref=e557]:
+    - code [ref=e558]: RunnerIO
+    - text: is kept as a type alias for the intersection. All existing consumers satisfy both sub-interfaces via structural typing with no call-site changes.
+  - heading "Improvement roadmap (Phase 11)" [level=2] [ref=e559]:
+    - link [ref=e560] [cursor=pointer]:
+      - /url: "#improvement-roadmap-(phase-11)"
+      - text: "#"
+    - text: Improvement roadmap (Phase 11)
+  - paragraph [ref=e561]:
+    - text: "Phase 11 addresses the composition root hotspot and remaining UI complexity. The approach is outside-in: start at"
+    - code [ref=e562]: index.ts
+    - text: "(the package's #1 churn hotspot, score 100, accelerating) and push wiring into domain modules, then address the remaining fallow refactoring targets."
+  - heading "Findings" [level=3] [ref=e563]:
+    - link [ref=e564] [cursor=pointer]:
+      - /url: "#findings"
+      - text: "#"
+    - text: Findings
+  - table [ref=e565]:
+    - rowgroup [ref=e566]:
+      - row "Metric Value" [ref=e567]:
+        - columnheader "Metric" [ref=e568]
+        - columnheader "Value" [ref=e569]
+    - rowgroup [ref=e570]:
+      - row "Health score 75/100 (B)" [ref=e571]:
+        - cell "Health score" [ref=e572]
+        - cell "75/100 (B)" [ref=e573]
+      - row "#1 hotspot index.ts (128 commits, accelerating)" [ref=e574]:
+        - cell "#1 hotspot" [ref=e575]
+        - cell "index.ts (128 commits, accelerating)" [ref=e576]:
+          - code [ref=e577]: index.ts
+          - text: (128 commits, accelerating)
+      - row "Dead exports 1 (getToolCallName re-export)" [ref=e578]:
+        - cell "Dead exports" [ref=e579]
+        - cell "1 (getToolCallName re-export)" [ref=e580]:
+          - text: 1 (
+          - code [ref=e581]: getToolCallName
+          - text: re-export)
+      - row "Production duplication 0" [ref=e582]:
+        - cell "Production duplication" [ref=e583]
+        - cell "0" [ref=e584]
+      - row "Test duplication 1,396 lines (69 clone groups, 22 files)" [ref=e585]:
+        - cell "Test duplication" [ref=e586]
+        - cell "1,396 lines (69 clone groups, 22 files)" [ref=e587]
+      - row "Refactoring targets 3 (all in ui/)" [ref=e588]:
+        - cell "Refactoring targets" [ref=e589]
+        - cell "3 (all in ui/)" [ref=e590]:
+          - text: 3 (all in
+          - code [ref=e591]: ui/
+          - text: )
+      - row "as any casts in index 5" [ref=e592]:
+        - cell "as any casts in index" [ref=e593]:
+          - code [ref=e594]: as any
+          - text: casts in index
+        - cell "5" [ref=e595]
+      - row "Adapter closures in index 44" [ref=e596]:
+        - cell "Adapter closures in index" [ref=e597]
+        - cell "44" [ref=e598]
+      - row "Index fan-out 25 imports" [ref=e599]:
+        - cell "Index fan-out" [ref=e600]
+        - cell "25 imports" [ref=e601]
+  - 'heading "Step 1: Define ParentSessionContext narrow interface" [level=3] [ref=e602]':
+    - link [ref=e603] [cursor=pointer]:
+      - /url: "#step-1%3A-define-parentsessioncontext-narrow-interface"
+      - text: "#"
+    - text: "Step 1: Define"
+    - code [ref=e604]: ParentSessionContext
+    - text: narrow interface
+  - paragraph [ref=e605]:
+    - text: The 4
+    - code [ref=e606]: as any
+    - text: casts at lines 218–223 of
+    - code [ref=e607]: index.ts
+    - text: "all access the same shape:"
+    - code [ref=e608]: "{ model, modelRegistry, sessionManager }"
+    - text: from the Pi SDK context. Define a narrow
+    - code [ref=e609]: ParentSessionContext
+    - text: interface in
+    - code [ref=e610]: types.ts
+    - text: ", cast once at the boundary ("
+    - code [ref=e611]: tool_execution_start
+    - text: handler), and pass the typed value into tool deps.
+  - list [ref=e612]:
+    - listitem [ref=e613]:
+      - text: "Target:"
+      - code [ref=e614]: src/types.ts
+      - text: ","
+      - code [ref=e615]: src/handlers/tool-start.ts
+      - text: ","
+      - code [ref=e616]: src/index.ts
+    - listitem [ref=e617]: "Smell: Category C (coupling — platform type threading)"
+    - listitem [ref=e618]:
+      - text: "Outcome: 4"
+      - code [ref=e619]: as any
+      - text: casts → 0 in index.ts; 1 cast at the handler boundary
+  - 'heading "Step 2: Extract observer wiring into observation/agent-observer.ts" [level=3] [ref=e620]':
+    - link [ref=e621] [cursor=pointer]:
+      - /url: "#step-2%3A-extract-observer-wiring-into-observation%2Fagent-observer.ts"
+      - text: "#"
+    - text: "Step 2: Extract observer wiring into"
+    - code [ref=e622]: observation/agent-observer.ts
+  - paragraph [ref=e623]:
+    - text: The inline
+    - code [ref=e624]: "observer: AgentManagerObserver"
+    - text: object (lines 86–136 of
+    - code [ref=e625]: index.ts
+    - text: ", ~50 lines) performs event emission, entry persistence, and notification dispatch. Extract into a factory"
+    - code [ref=e626]: createAgentObserver(pi, notifications)
+    - text: that returns the wired observer.
+  - list [ref=e627]:
+    - listitem [ref=e628]:
+      - text: "Target: new"
+      - code [ref=e629]: src/observation/agent-observer.ts
+      - text: ","
+      - code [ref=e630]: src/index.ts
+    - listitem [ref=e631]: "Smell: Category B (god file — index.ts mixes wiring with domain logic)"
+    - listitem [ref=e632]: "Outcome: index.ts shrinks by ~50 lines; observer logic is unit-testable"
+  - 'heading "Step 3: Extract runnerIO construction into lifecycle/runner-io-factory.ts" [level=3] [ref=e633]':
+    - link [ref=e634] [cursor=pointer]:
+      - /url: "#step-3%3A-extract-runnerio-construction-into-lifecycle%2Frunner-io-factory.ts"
+      - text: "#"
+    - text: "Step 3: Extract"
+    - code [ref=e635]: runnerIO
+    - text: construction into
+    - code [ref=e636]: lifecycle/runner-io-factory.ts
+  - paragraph [ref=e637]:
+    - text: The
+    - code [ref=e638]: runnerIO
+    - text: object (lines 139–150 of
+    - code [ref=e639]: index.ts
+    - text: ) wraps SDK constructors. Extract into
+    - code [ref=e640]: createRunnerIO(pi)
+    - text: factory.
+  - list [ref=e641]:
+    - listitem [ref=e642]:
+      - text: "Target: new"
+      - code [ref=e643]: src/lifecycle/runner-io-factory.ts
+      - text: ","
+      - code [ref=e644]: src/index.ts
+    - listitem [ref=e645]: "Smell: Category B (god file) + Category C (SDK coupling)"
+    - listitem [ref=e646]: "Outcome: index.ts shrinks by ~12 lines; SDK constructor wrapping is co-located with other lifecycle concerns"
+  - 'heading "Step 4: Consolidate tool registration wiring" [level=3] [ref=e647]':
+    - link [ref=e648] [cursor=pointer]:
+      - /url: "#step-4%3A-consolidate-tool-registration-wiring"
+      - text: "#"
+    - text: "Step 4: Consolidate tool registration wiring"
+  - paragraph [ref=e649]:
+    - text: "The three tool registrations (Agent, get_subagent_result, steer_subagent) at lines 194–245 use repeated patterns: narrow interface objects built from the same underlying"
+    - code [ref=e650]: manager
+    - text: ","
+    - code [ref=e651]: runtime
+    - text: ","
+    - code [ref=e652]: notifications
+    - text: . Extract a
+    - code [ref=e653]: createToolWiring(manager, runtime, notifications, registry, settings)
+    - text: factory in
+    - code [ref=e654]: tools/tool-wiring.ts
+    - text: that produces all three tool definitions.
+  - list [ref=e655]:
+    - listitem [ref=e656]:
+      - text: "Target: new"
+      - code [ref=e657]: src/tools/tool-wiring.ts
+      - text: ","
+      - code [ref=e658]: src/index.ts
+    - listitem [ref=e659]: "Smell: Category B (god file) + Category C (adapter closure density: 16+ thin closures)"
+    - listitem [ref=e660]:
+      - text: "Outcome: index.ts shrinks by ~80 lines; tool registration is 3 lines ("
+      - code [ref=e661]: registerTools(pi, createToolWiring(...))
+      - text: )
+  - 'heading "Step 5: Remove dead getToolCallName re-export" [level=3] [ref=e662]':
+    - link [ref=e663] [cursor=pointer]:
+      - /url: "#step-5%3A-remove-dead-gettoolcallname-re-export"
+      - text: "#"
+    - text: "Step 5: Remove dead"
+    - code [ref=e664]: getToolCallName
+    - text: re-export
+  - paragraph [ref=e665]:
+    - text: Fallow reports
+    - code [ref=e666]: getToolCallName
+    - text: in
+    - code [ref=e667]: ui/message-formatters.ts:24
+    - text: as an unused re-export. Remove the re-export (the canonical export in
+    - code [ref=e668]: session/content-items.ts
+    - text: remains).
+  - list [ref=e669]:
+    - listitem [ref=e670]:
+      - text: "Target:"
+      - code [ref=e671]: src/ui/message-formatters.ts
+    - listitem [ref=e672]: "Smell: Category A (dead code)"
+    - listitem [ref=e673]: "Outcome: 0 dead exports"
+  - 'heading "Step 6: Decompose renderWidgetLines (cognitive 44)" [level=3] [ref=e674]':
+    - link [ref=e675] [cursor=pointer]:
+      - /url: "#step-6%3A-decompose-renderwidgetlines-(cognitive-44)"
+      - text: "#"
+    - text: "Step 6: Decompose"
+    - code [ref=e676]: renderWidgetLines
+    - text: (cognitive 44)
+  - paragraph [ref=e677]:
+    - text: "Fallow's #3 refactoring target."
+    - code [ref=e678]: renderWidgetLines
+    - text: in
+    - code [ref=e679]: ui/widget-renderer.ts
+    - text: handles agent-status formatting, tree connectors, overflow, and empty states in a single function. Extract per-status renderers (
+    - code [ref=e680]: renderQueuedAgent
+    - text: ","
+    - code [ref=e681]: renderRunningAgent
+    - text: ","
+    - code [ref=e682]: renderCompletedAgent
+    - text: ) and a tree-connector utility.
+  - list [ref=e683]:
+    - listitem [ref=e684]:
+      - text: "Target:"
+      - code [ref=e685]: src/ui/widget-renderer.ts
+    - listitem [ref=e686]: "Smell: Category B (god function)"
+    - listitem [ref=e687]:
+      - text: "Outcome:"
+      - code [ref=e688]: renderWidgetLines
+      - text: reduced to dispatch loop; cognitive complexity < 10
+  - 'heading "Step 7: Decompose showAgentDetail (cognitive 33)" [level=3] [ref=e689]':
+    - link [ref=e690] [cursor=pointer]:
+      - /url: "#step-7%3A-decompose-showagentdetail-(cognitive-33)"
+      - text: "#"
+    - text: "Step 7: Decompose"
+    - code [ref=e691]: showAgentDetail
+    - text: (cognitive 33)
+  - paragraph [ref=e692]:
+    - text: "Fallow's #2 refactoring target."
+    - code [ref=e693]: showAgentDetail
+    - text: in
+    - code [ref=e694]: ui/agent-config-editor.ts
+    - text: handles display, edit, eject, and delete flows in one function. Extract
+    - code [ref=e695]: renderAgentDetail
+    - text: ","
+    - code [ref=e696]: handleAgentEdit
+    - text: ","
+    - code [ref=e697]: handleAgentEject
+    - text: sub-functions.
+  - list [ref=e698]:
+    - listitem [ref=e699]:
+      - text: "Target:"
+      - code [ref=e700]: src/ui/agent-config-editor.ts
+    - listitem [ref=e701]: "Smell: Category B (god function)"
+    - listitem [ref=e702]:
+      - text: "Outcome:"
+      - code [ref=e703]: showAgentDetail
+      - text: reduced to menu dispatch; cognitive complexity < 10
+  - 'heading "Step 8: Decompose update in agent-widget.ts (cognitive 31)" [level=3] [ref=e704]':
+    - link [ref=e705] [cursor=pointer]:
+      - /url: "#step-8%3A-decompose-update-in-agent-widget.ts-(cognitive-31)"
+      - text: "#"
+    - text: "Step 8: Decompose"
+    - code [ref=e706]: update
+    - text: in
+    - code [ref=e707]: agent-widget.ts
+    - text: (cognitive 31)
+  - paragraph [ref=e708]:
+    - text: "Fallow's #1 refactoring target."
+    - code [ref=e709]: update
+    - text: mixes timer lifecycle, agent list assembly, render delegation, and visibility state. Extract
+    - code [ref=e710]: assembleWidgetState
+    - text: (pure) and
+    - code [ref=e711]: manageWidgetTimer
+    - text: (lifecycle).
+  - list [ref=e712]:
+    - listitem [ref=e713]:
+      - text: "Target:"
+      - code [ref=e714]: src/ui/agent-widget.ts
+    - listitem [ref=e715]: "Smell: Category B (god function)"
+    - listitem [ref=e716]:
+      - text: "Outcome:"
+      - code [ref=e717]: update
+      - text: reduced to 3-step orchestration; cognitive complexity < 10
+  - 'heading "Step 9: Extract shared test fixtures for largest clone families" [level=3] [ref=e718]':
+    - link [ref=e719] [cursor=pointer]:
+      - /url: "#step-9%3A-extract-shared-test-fixtures-for-largest-clone-families"
+      - text: "#"
+    - text: "Step 9: Extract shared test fixtures for largest clone families"
+  - paragraph [ref=e720]: "The test duplication analysis shows 3 heavy clone families:"
+  - list [ref=e721]:
+    - listitem [ref=e722]:
+      - code [ref=e723]: agent-runner.test.ts
+      - text: +
+      - code [ref=e724]: agent-runner-extension-tools.test.ts
+      - text: (60-line shared setup)
+    - listitem [ref=e725]:
+      - code [ref=e726]: agent-menu.test.ts
+      - text: +
+      - code [ref=e727]: agent-creation-wizard.test.ts
+      - text: +
+      - code [ref=e728]: agent-config-editor.test.ts
+      - text: (54+51+24 lines shared)
+    - listitem [ref=e729]:
+      - code [ref=e730]: agent-manager.test.ts
+      - text: (18 internal clone groups, 210 duplicated lines)
+  - paragraph [ref=e731]:
+    - text: Extract shared factories into
+    - code [ref=e732]: test/fixtures/
+    - text: modules.
+  - list [ref=e733]:
+    - listitem [ref=e734]:
+      - text: "Target: new"
+      - code [ref=e735]: test/fixtures/runner-setup.ts
+      - text: ","
+      - code [ref=e736]: test/fixtures/menu-setup.ts
+      - text: ","
+      - code [ref=e737]: test/fixtures/manager-setup.ts
+    - listitem [ref=e738]: "Smell: Category D (test duplication)"
+    - listitem [ref=e739]: "Outcome: test duplication reduced by ~400 lines; shared setup has single source of truth"
+  - heading "Step dependencies" [level=3] [ref=e740]:
+    - link [ref=e741] [cursor=pointer]:
+      - /url: "#step-dependencies"
+      - text: "#"
+    - text: Step dependencies
+  - generic [ref=e742]: "flowchart LR subgraph index[\"Index.ts hotspot reduction\"] S1[\"1: ParentSessionContext type\"] S2[\"2: Extract observer wiring\"] S3[\"3: Extract runnerIO factory\"] S4[\"4: Consolidate tool registration\"] end subgraph cleanup[\"Dead code\"] S5[\"5: Remove dead re-export\"] end subgraph complexity[\"UI complexity reduction\"] S6[\"6: renderWidgetLines\"] S7[\"7: showAgentDetail\"] S8[\"8: agent-widget update\"] end subgraph tests[\"Test quality\"] S9[\"9: Shared test fixtures\"] end S1 --> S4"
+  - paragraph [ref=e743]:
+    - text: Step 1 enables Step 4 (tool wiring uses the narrow context type instead of
+    - code [ref=e744]: as any
+    - text: casts). All other steps are independent — the four tracks can proceed in parallel.
+  - heading "Refactoring history" [level=2] [ref=e745]:
+    - link [ref=e746] [cursor=pointer]:
+      - /url: "#refactoring-history"
+      - text: "#"
+    - text: Refactoring history
+  - paragraph [ref=e747]: "Phases 1–5 and 7–10 are complete. Phase 6 (UI extraction to a separate package) is deferred. Detailed records are preserved in per-phase history files:"
+  - table [ref=e748]:
+    - rowgroup [ref=e749]:
+      - row "Phase Title Status History" [ref=e750]:
+        - columnheader "Phase" [ref=e751]
+        - columnheader "Title" [ref=e752]
+        - columnheader "Status" [ref=e753]
+        - columnheader "History" [ref=e754]
+    - rowgroup [ref=e755]:
+      - row "1 Export SubagentsService API boundary Complete phase-1-api-boundary.md" [ref=e756]:
+        - cell "1" [ref=e757]
+        - cell "Export SubagentsService API boundary" [ref=e758]
+        - cell "Complete" [ref=e759]
+        - cell "phase-1-api-boundary.md" [ref=e760]:
+          - link "phase-1-api-boundary.md" [ref=e761] [cursor=pointer]:
+            - /url: history/phase-1-api-boundary.md
+      - row "2 Remove scheduling subsystem Complete phase-2-remove-scheduling.md" [ref=e762]:
+        - cell "2" [ref=e763]
+        - cell "Remove scheduling subsystem" [ref=e764]
+        - cell "Complete" [ref=e765]
+        - cell "phase-2-remove-scheduling.md" [ref=e766]:
+          - link "phase-2-remove-scheduling.md" [ref=e767] [cursor=pointer]:
+            - /url: history/phase-2-remove-scheduling.md
+      - row "3 Remove group-join, RPC; replace output-file Complete phase-3-remove-rpc-groupjoin.md" [ref=e768]:
+        - cell "3" [ref=e769]
+        - cell "Remove group-join, RPC; replace output-file" [ref=e770]
+        - cell "Complete" [ref=e771]
+        - cell "phase-3-remove-rpc-groupjoin.md" [ref=e772]:
+          - link "phase-3-remove-rpc-groupjoin.md" [ref=e773] [cursor=pointer]:
+            - /url: history/phase-3-remove-rpc-groupjoin.md
+      - row "4 Implement and publish SubagentsService Complete phase-4-implement-service.md" [ref=e774]:
+        - cell "4" [ref=e775]
+        - cell "Implement and publish SubagentsService" [ref=e776]
+        - cell "Complete" [ref=e777]
+        - cell "phase-4-implement-service.md" [ref=e778]:
+          - link "phase-4-implement-service.md" [ref=e779] [cursor=pointer]:
+            - /url: history/phase-4-implement-service.md
+      - row "5 Decompose index.ts Complete phase-5-decompose-index.md" [ref=e780]:
+        - cell "5" [ref=e781]
+        - cell "Decompose index.ts" [ref=e782]
+        - cell "Complete" [ref=e783]
+        - cell "phase-5-decompose-index.md" [ref=e784]:
+          - link "phase-5-decompose-index.md" [ref=e785] [cursor=pointer]:
+            - /url: history/phase-5-decompose-index.md
+      - row "6 Extract UI to separate package Deferred —" [ref=e786]:
+        - cell "6" [ref=e787]
+        - cell "Extract UI to separate package" [ref=e788]
+        - cell "Deferred" [ref=e789]
+        - cell "—" [ref=e790]
+      - row "7 Encapsulation and dependency narrowing Complete phase-7-encapsulation.md" [ref=e791]:
+        - cell "7" [ref=e792]
+        - cell "Encapsulation and dependency narrowing" [ref=e793]
+        - cell "Complete" [ref=e794]
+        - cell "phase-7-encapsulation.md" [ref=e795]:
+          - link "phase-7-encapsulation.md" [ref=e796] [cursor=pointer]:
+            - /url: history/phase-7-encapsulation.md
+      - row "8 Testability, display extraction, menu decomposition Complete phase-8-testability.md" [ref=e797]:
+        - cell "8" [ref=e798]
+        - cell "Testability, display extraction, menu decomposition" [ref=e799]
+        - cell "Complete" [ref=e800]
+        - cell "phase-8-testability.md" [ref=e801]:
+          - link "phase-8-testability.md" [ref=e802] [cursor=pointer]:
+            - /url: history/phase-8-testability.md
+      - row "9 Observation consolidation, ctx elimination Complete phase-9-observation-ctx.md" [ref=e803]:
+        - cell "9" [ref=e804]
+        - cell "Observation consolidation, ctx elimination" [ref=e805]
+        - cell "Complete" [ref=e806]
+        - cell "phase-9-observation-ctx.md" [ref=e807]:
+          - link "phase-9-observation-ctx.md" [ref=e808] [cursor=pointer]:
+            - /url: history/phase-9-observation-ctx.md
+      - row "10 Domain organization, bag decomposition, complexity Complete phase-10-structural-decomposition.md" [ref=e809]:
+        - cell "10" [ref=e810]
+        - cell "Domain organization, bag decomposition, complexity" [ref=e811]
+        - cell "Complete" [ref=e812]
+        - cell "phase-10-structural-decomposition.md" [ref=e813]:
+          - link "phase-10-structural-decomposition.md" [ref=e814] [cursor=pointer]:
+            - /url: history/phase-10-structural-decomposition.md
+  - heading "Structural refactoring issues" [level=3] [ref=e815]:
+    - link [ref=e816] [cursor=pointer]:
+      - /url: "#structural-refactoring-issues"
+      - text: "#"
+    - text: Structural refactoring issues
+  - table [ref=e817]:
+    - rowgroup [ref=e818]:
+      - row "Phase Issue Summary" [ref=e819]:
+        - columnheader "Phase" [ref=e820]
+        - columnheader "Issue" [ref=e821]
+        - columnheader "Summary" [ref=e822]
+    - rowgroup [ref=e823]:
+      - 'row "Foundation #69, #71, #76, #80 SubagentRuntime, pure assembler, cwd injection, config consolidation" [ref=e824]':
+        - cell "Foundation" [ref=e825]
+        - 'cell "#69, #71, #76, #80" [ref=e826]'
+        - cell "SubagentRuntime, pure assembler, cwd injection, config consolidation" [ref=e827]
+      - 'row "Core decomposition #84, #72, #87, #70 WorktreeManager, AgentManager DI, runtime methods, handler extraction" [ref=e828]':
+        - cell "Core decomposition" [ref=e829]
+        - 'cell "#84, #72, #87, #70" [ref=e830]'
+        - cell "WorktreeManager, AgentManager DI, runtime methods, handler extraction" [ref=e831]
+      - 'row "Interface polish #66, #77 SDK types, projectAgentsDir" [ref=e832]':
+        - cell "Interface polish" [ref=e833]
+        - 'cell "#66, #77" [ref=e834]'
+        - cell "SDK types, projectAgentsDir" [ref=e835]
+      - 'row "Features #61 JSONL session transcripts" [ref=e836]':
+        - cell "Features" [ref=e837]
+        - cell "#61" [ref=e838]
+        - cell "JSONL session transcripts" [ref=e839]
+      - 'row "AgentManager #98, #99, #100, #102 Record state machine, ParentSnapshot, session-event observation, test factory" [ref=e840]':
+        - cell "AgentManager" [ref=e841]
+        - 'cell "#98, #99, #100, #102" [ref=e842]'
+        - cell "Record state machine, ParentSnapshot, session-event observation, test factory" [ref=e843]
+      - 'row "Encapsulation #108, #109, #110, #111, #112, #113, #114, #115, #116, #118 Registry, settings, activity tracker, record lifecycle, observer, spawn options, deps narrowing, tool split, type housekeeping" [ref=e844]':
+        - cell "Encapsulation" [ref=e845]
+        - 'cell "#108, #109, #110, #111, #112, #113, #114, #115, #116, #118" [ref=e846]'
+        - cell "Registry, settings, activity tracker, record lifecycle, observer, spawn options, deps narrowing, tool split, type housekeeping" [ref=e847]
+      - 'row "Testability #131, #132, #133, #134, #135, #136 Shared fixtures, session-config IO, runner SDK boundary, as-any reduction, display extraction, menu decomposition" [ref=e848]':
+        - cell "Testability" [ref=e849]
+        - 'cell "#131, #132, #133, #134, #135, #136" [ref=e850]'
+        - cell "Shared fixtures, session-config IO, runner SDK boundary, as-any reduction, display extraction, menu decomposition" [ref=e851]
+      - 'row "Observation/ctx #144, #145, #146, #147, #148 Observation consolidation, execute decomposition, UI context, text wrapping injection, widget rendering split" [ref=e852]':
+        - cell "Observation/ctx" [ref=e853]
+        - 'cell "#144, #145, #146, #147, #148" [ref=e854]'
+        - cell "Observation consolidation, execute decomposition, UI context, text wrapping injection, widget rendering split" [ref=e855]
+      - 'row "Phase 10 #164, #165, #166, #167, #168, #169, #170, #171, #172 Domain directories, ResolvedSpawnConfig, ParentSessionInfo, RunnerIO split, ToolFilterConfig, RunContext, buildContentLines, renderResult, content-items" [ref=e856]':
+        - cell "Phase 10" [ref=e857]
+        - 'cell "#164, #165, #166, #167, #168, #169, #170, #171, #172" [ref=e858]'
+        - cell "Domain directories, ResolvedSpawnConfig, ParentSessionInfo, RunnerIO split, ToolFilterConfig, RunContext, buildContentLines, renderResult, content-items" [ref=e859]
+  - paragraph [ref=e860]: "The remaining open issue is #22 (parent-session resolution), a cross-extension track that does not gate the structural work."
+  - heading "Relationship with upstream" [level=2] [ref=e861]:
+    - link [ref=e862] [cursor=pointer]:
+      - /url: "#relationship-with-upstream"
+      - text: "#"
+    - text: Relationship with upstream
+  - paragraph [ref=e863]:
+    - text: This fork (
+    - code [ref=e864]: "@gotgenes/pi-subagents"
+    - text: in the
+    - link "gotgenes/pi-packages" [ref=e865] [cursor=pointer]:
+      - /url: https://github.com/gotgenes/pi-packages
+    - text: monorepo) is a hard fork of
+    - link "tintinweb/pi-subagents" [ref=e866] [cursor=pointer]:
+      - /url: https://github.com/tintinweb/pi-subagents
+    - text: . The decomposition diverges materially from upstream's direction.
+  - paragraph [ref=e867]: "The three upstream PRs (#71, #72, #73) remain open. If they land, upstream gains the peer-dep fix and the two RepOne patches. This fork continues independently regardless."
+  - paragraph [ref=e868]: Upstream fixes and ideas are cherry-picked when they align with this fork's scope. The upstream test suite is run periodically as a regression canary for the agent-runner core.

@@ -1,0 +1,24 @@
+name: Auto-label issues by package
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  # `contents: read` for the checkout: the labeler reads the package list from
+  # the workspace on disk rather than a hardcoded copy (Refs #818, #865), and
+  # naming any permission defaults every unnamed one to `none`.
+  contents: read
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Apply package labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: ./scripts/label-issues.sh "$ISSUE_NUMBER"
