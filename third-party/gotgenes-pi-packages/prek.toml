@@ -1,0 +1,39 @@
+# Configuration file for `prek`, a git hook framework written in Rust.
+# See https://prek.j178.dev for more information.
+#:schema https://www.schemastore.org/prek.json
+
+default_install_hook_types = ["pre-commit", "commit-msg"]
+
+[[repos]]
+repo = "builtin"
+hooks = [
+    { id = "trailing-whitespace" },
+    { id = "end-of-file-fixer" },
+    { id = "check-added-large-files" },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+    { id = "biome", name = "biome", entry = "pnpm exec biome check --write --files-ignore-unknown=true", language = "system", types_or = ["javascript", "jsx", "ts", "tsx", "json"] },
+    { id = "eslint", name = "eslint", entry = "pnpm exec eslint --fix", language = "system", types = ["ts"], files = "^packages/" },
+]
+
+[[repos]]
+# Pinned in lockstep with the `rumdl` catalog entry in pnpm-workspace.yaml.
+# 0.2.45+ regressed MD013 sentence-per-line reflow (rvben/rumdl#811); 0.2.24 is
+# the newest release clean on this repo's markdown.
+repo = "https://github.com/rvben/rumdl-pre-commit"
+rev = "v0.2.24"
+hooks = [
+    { id = "rumdl-fmt" },
+]
+
+# Conventional Commit grammar check on the commit-msg stage. Rejects the
+# malformed `type!(scope):` form (Refs #452, #457). Config: committed.toml.
+[[repos]]
+repo = "https://github.com/crate-ci/committed"
+rev = "v1.1.11"
+hooks = [
+    { id = "committed" },
+]

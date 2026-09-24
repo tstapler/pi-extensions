@@ -1,0 +1,64 @@
+name: Bug Report
+description: Report a bug in a pi package
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      description: Which package is affected? Choose repo-wide for build, CI, tooling, or cross-package docs.
+      multiple: true
+      options:
+        - pi-autoformat
+        - pi-colgrep
+        - pi-github-tools
+        - pi-nocd
+        - pi-permission-model-judge
+        - pi-permission-system
+        - pi-session-tools
+        - pi-subagents
+        - pi-subagents-worktrees
+        - repo-wide (not a specific package)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: "Run: pi list | grep <package>. Leave blank for a repo-wide issue."
+      placeholder: "e.g. 4.0.5"
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the behavior.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Pi version, OS, logs, screenshots, etc.
+    validations:
+      required: false
