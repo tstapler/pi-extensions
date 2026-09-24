@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "packages/*/src/extension.ts",
+    "packages/*/src/index.ts",
+    "packages/*/src/service.ts"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "ignoreDependencies": ["tree-sitter-bash", "@gotgenes/pi-subagents"],
+  "ignorePatterns": ["**/test/fixtures/**", "**/tests/fixtures/**", ".pi/**"],
+  "health": {
+    "thresholdOverrides": [
+      {
+        "files": ["**/*.test.*", "**/*.spec.*", "**/test/**", "**/tests/**"],
+        "maxUnitSize": 500,
+        "reason": "describe()/it() callbacks are whole-suite closures; the 60-LOC unit-size bar reports every block. Relax the ceiling for test files so `fallow health` stays prod-focused (complexity/CRAP checks unchanged)."
+      }
+    ]
+  },
+  "rules": {
+    "unused-files": "error",
+    "unused-exports": "error",
+    "unused-types": "error",
+    "unused-class-members": "error",
+    "circular-dependencies": "error",
+    "unlisted-dependencies": "error",
+    "unresolved-imports": "error",
+    "unused-dev-dependencies": "error",
+    "dev-dependencies-in-production": "error",
+    "stale-suppressions": "error"
+  }
+}

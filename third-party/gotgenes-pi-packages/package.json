@@ -1,0 +1,31 @@
+{
+  "private": true,
+  "name": "@gotgenes/pi-packages",
+  "type": "module",
+  "description": "Monorepo for @gotgenes pi packages",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "prepare": "command -v prek >/dev/null 2>&1 && prek install || echo 'prek not found \u2014 skipping hook install (see README)'",
+    "check": "pnpm -r run check",
+    "test": "pnpm -r run test",
+    "lint": "biome check . && eslint packages/ && rumdl check .",
+    "lint:fix": "biome check --write . && eslint packages/ --fix && rumdl fmt .",
+    "format": "biome format --write .",
+    "fallow": "fallow",
+    "fallow:audit": "fallow audit",
+    "fallow:health": "fallow health --score --hotspots --targets",
+    "fallow:dead-code": "fallow dead-code",
+    "fallow:dupes": "fallow dupes"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "catalog:",
+    "eslint": "catalog:",
+    "fallow": "catalog:",
+    "globals": "catalog:",
+    "rumdl": "catalog:",
+    "typescript-eslint": "catalog:"
+  }
+}
